@@ -40,6 +40,7 @@
 - `scripts/generate-update-key.mjs` — maintainer-only Ed25519 key generation.
 - `scripts/publish-update-channel.mjs` — maintainer-only detached signing + channel publication.
 - `security/update-public-key.pem` — committed public trust root.
+- `.github/workflows/ci.yml` — non-signing install/typecheck/test/build gate; it never receives the release-signing private key.
 - `tests/update-channel.test.ts` — crypto/channel tests.
 - `tests/update-transaction.test.ts` — update transaction tests.
 
@@ -864,8 +865,9 @@ git commit -m "feat: make automatic updates verified and rollback-safe"
 - Create: `scripts/generate-update-key.mjs`
 - Create: `scripts/publish-update-channel.mjs`
 - Create: `security/update-public-key.pem`
+- Create: `.github/workflows/ci.yml`
 - Modify: `src/update/trust.ts`
-- Extend test: `tests/update-channel.test.ts`
+- Test: `tests/update-channel.test.ts`
 
 **Critical rule:** The private signing key MUST NOT be stored in Git, GitHub Actions secrets, repository environments, or any CI/workflow whose code can be changed by this repository. Repository CI may test commits, but it never receives the signing key.
 
@@ -916,7 +918,7 @@ The private path must be outside the repository and backed up securely. Do not p
 5. sign exact bytes with `crypto.sign(null, bytes, privateKey)`;
 6. write Base64 signature + LF;
 7. create a Git tree containing only `latest.json` + `latest.sig` via `git hash-object -w`, `git mktree`, `git commit-tree`;
-8. set explicit commit identity for the generated channel commit, for example:
+8. set explicit commit identity for the generated channel commit:
 
 ```text
 GIT_AUTHOR_NAME=C2C Update Signer
@@ -934,7 +936,7 @@ Use a temporary bare repo and ephemeral keypair. Publish a signed channel entry,
 
 - [ ] **Step 6: Add repository CI as a non-signing gate**
 
-If no CI exists, add a standard workflow that runs on PRs and `main`:
+Create `.github/workflows/ci.yml` triggered on pull requests and pushes to `main`, with only the permissions needed to read repository contents. It runs:
 
 ```bash
 corepack enable
@@ -944,7 +946,7 @@ corepack pnpm test
 corepack pnpm build
 ```
 
-The CI workflow must NOT receive any release-signing secret.
+The workflow MUST NOT reference a release-signing secret or receive the private signing key.
 
 - [ ] **Step 7: Define the maintainer release procedure**
 
