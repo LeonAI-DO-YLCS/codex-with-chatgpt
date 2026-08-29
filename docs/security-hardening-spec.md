@@ -32,7 +32,7 @@ The following are deliberate product decisions and must not be reopened by an im
 - Any HTTPS OAuth client may register. Security comes from pairing + PKCE + token controls, not provider allowlisting.
 - Repository content may influence a cloud model's planning. C2C's tool descriptions continue to mark repository content as untrusted, but local execution safety remains the Codex/local-agent responsibility.
 - No new transmission audit trail is created.
-- The update process remains automatic.
+- The end-user update process remains automatic. Release signing is a maintainer trust operation and is not exposed to end users.
 
 ## 3. Findings that MUST be fixed
 
@@ -131,9 +131,9 @@ Today a non-empty scope request containing zero recognized scopes falls back to 
 
 **Current locations:** `src/cli/index.ts` `update-check`; `skill/SKILL.md` update workflow.
 
-The current updater trusts `origin` + `git pull --ff-only`. Fully automatic updates are a locked feature, so the fix must be transparent.
+The current updater trusts `origin` + `git pull --ff-only`. Fully automatic **end-user** updates are a locked feature, so the installed client must continue discovering and installing updates without user confirmation.
 
-**Required architecture:** signed update channel using Node's built-in Ed25519 verification; no new end-user runtime dependency.
+**Required architecture:** detached Ed25519-signed update channel using Node's built-in crypto; the signing private key MUST remain outside repository-controlled CI/workflows.
 
 1. Add a pinned Ed25519 public key to the installed source tree. The updater always verifies using the public key from the **currently running/installed version**, never a key read from the candidate update.
 2. Add a dedicated remote branch `c2c-update-channel` containing only:
@@ -151,22 +151,25 @@ The current updater trusts `origin` + `git pull --ff-only`. Fully automatic upda
    - fetches the update-channel ref into a private local ref;
    - reads `latest.json` + `latest.sig` with `git show`;
    - verifies Ed25519 signature using the pinned current-version key;
-   - verifies manifest repository/branch/schema, SHA syntax, and that manifest commit equals the current remote `main` SHA;
+   - verifies manifest repository/branch/schema/SHA and that manifest commit equals the current remote `main` SHA;
    - if verification fails or publication is racing, reports no actionable update and does not record a successful daily check, so it retries later;
    - never treats an unsigned/unverified remote SHA as updateable.
-6. Add `c2c update -w <workspace> --json` as the single secure automatic update operation. It MUST:
+6. Add `c2c update -w <workspace> --json` as the single secure automatic end-user update operation. It MUST:
    - repeat signature verification (never trust cached `update-check` output);
    - fetch the signed target commit;
    - require current `HEAD` to be an ancestor of the signed target (`git merge-base --is-ancestor`), preventing downgrade/non-fast-forward replacement;
-   - preserve the current behavior for local checkout edits by stashing tracked + untracked changes before update;
+   - preserve current local-edit behavior by stashing tracked + untracked changes before update;
    - record old HEAD for rollback;
    - fast-forward to the exact verified target SHA;
    - run `corepack pnpm install --frozen-lockfile` and `corepack pnpm build`;
    - if install/build fails, reset to old HEAD, restore old dependencies/build with `--frozen-lockfile`, and return a machine-readable failure without restarting the bridge;
    - on success, reinstall the Skill, run sandbox-allow, restart the workspace bridge, and refresh the update-check cache;
-   - remain non-interactive except for existing platform elevation/login behavior outside the updater itself.
-7. Add maintainer tooling and CI to publish the update channel automatically on every successful push to `main` after repository tests pass. The signing private key is a GitHub Actions secret and is never committed/logged. The public key is committed/pinned.
-8. **Trust bootstrap:** the merge/install of the hardening release is the one-time bootstrap. Cryptographically verified automatic updates are guaranteed only after a version containing the pinned public key is installed.
+   - remain non-interactive for end users.
+7. Add maintainer tooling to generate the signing keypair and publish a signed channel entry **from a trusted maintainer environment**. The private signing key MUST NOT be stored in this repository, a repository Actions secret, or any workflow/environment whose code is controlled by this repository. The publisher may run manually or from an independently controlled signing service/KMS later; the security requirement is separation from repository-controlled code.
+8. Repository CI may run install/typecheck/test/build and emit the exact tested commit SHA, but it MUST NOT receive the signing private key. A maintainer signs only the exact commit that passed CI.
+9. **Trust bootstrap:** the merge/install of the hardening release is the one-time bootstrap. Cryptographically verified automatic updates are guaranteed only after a version containing the pinned public key is installed.
+
+This design protects users if `origin`, the source repository, or its normal CI workflow is modified without access to the independent signing key. Compromise of the signing key itself remains a root-of-trust compromise.
 
 ### SH-08 — Dependency selection is not deterministic enough for a security-sensitive auto-updater
 
@@ -214,10 +217,11 @@ The hardening implementation is complete only when all of the following are true
 2. The existing full test suite passes unchanged except where tests are deliberately strengthened.
 3. `pnpm typecheck`, `pnpm build`, and `pnpm test` all succeed.
 4. A manual end-to-end smoke test confirms setup → tunnel → OAuth pairing → MCP read → Codex execute → cloud review still works.
-5. An automatic signed update succeeds without end-user confirmation.
+5. An automatic signed end-user update succeeds without end-user confirmation.
 6. A tampered/unsigned update is rejected without changing the installed checkout.
 7. A failed install/build rolls back to the previous working version.
 8. Public `/health` contains no workspace identifier/path-derived value.
 9. A malicious `.c2c.json` workspace name renders as text and cannot execute HTML/script.
 10. Sensitive filenames do not appear in MCP `git_status` output.
-11. No feature listed in §1 is removed, gated, or made provider-specific.
+11. The update signing private key is demonstrably absent from repository files and repository-controlled workflow secrets.
+12. No feature listed in §1 is removed, gated, or made provider-specific.
